@@ -1,0 +1,18 @@
+<launch>
+     <arg name="gui" default="true" />
+     <param name="use_gui" value="$(arg gui)"/>
+     <param name="rate" value="50.0"/>
+
+     <!-- send the g1 robot XML to param server -->
+     <param name="robot_description" textfile="$(find g1_description)/g1_23dof.urdf"/>
+        
+     <node name="joint_state_publisher_gui" pkg="joint_state_publisher_gui" type="joint_state_publisher_gui">
+     	<param name="publish_default_efforts" value="True"/>
+     </node>
+
+    <!-- start robot state publisher -->
+    <node pkg="robot_state_publisher" type="robot_state_publisher" name="robot_state_publisher" output="screen" >
+        <param name="publish_frequency" type="double" value="250.0" />
+    </node> 
+
+</launch>

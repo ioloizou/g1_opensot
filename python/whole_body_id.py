@@ -75,7 +75,8 @@ model.update()
 variables_vec = dict()
 variables_vec["qddot"] = model.nv
 
-line_foot_contact_frames = ["left_foot_line_contact_lower", "left_foot_line_contact_upper"]
+line_foot_contact_frames = ["left_foot_line_contact_lower", "left_foot_line_contact_upper",
+                            "right_foot_line_contact_lower", "right_foot_line_contact_upper"]
 
 # Hands may be added in the future
 contact_frames = line_foot_contact_frames
@@ -87,6 +88,7 @@ variables = pysot.OptvarHelper(variables_vec)
 # Set CoM tracking task
 com = CoM(model, variables.getVariable("qddot"))
 com.setLambda(1.)
+# FK at initial config
 com_ref, vel_ref, acc_ref = com.getReference()
 com0 = com_ref.copy()
 
@@ -96,7 +98,7 @@ base.setLambda(1.)
 
 # Set the contact task
 contact_tasks = list()
-cartesian_contact_task_frames = ["left_foot_point_contact", "left_foot_point_contact"]
+cartesian_contact_task_frames = ["left_foot_point_contact", "right_foot_point_contact"]
 for cartesian_contact_task_frame in cartesian_contact_task_frames:
   contact_tasks.append(Cartesian(cartesian_contact_task_frame, model, cartesian_contact_task_frame, "world", variables.getVariable("qddot")))
 

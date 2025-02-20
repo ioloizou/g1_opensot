@@ -1,17 +1,52 @@
 from xbot2_interface import pyxbot2_interface as xbi
 
 import numpy as np
-from ttictoc import tic,toc
 
 import rospy
 import tf
 from sensor_msgs.msg import JointState
 from geometry_msgs.msg import TransformStamped, WrenchStamped
 
-from pyopensot.tasks.acceleration import CoM, Cartesian, Postural, DynamicFeasibility
+from pyopensot.tasks.acceleration import CoM, Cartesian, DynamicFeasibility, Postural
 from pyopensot.constraints.acceleration import JointLimits, VelocityLimits
 from pyopensot.constraints.force import FrictionCone
 import pyopensot as pysot
+
+
+def MinVariable(opt_var):
+	'''Task to regularize a variable using a generic task'''
+	A = opt_var.getM()
+
+	# The minus because y = Mx + q is mapped on ||Ax - b|| 
+	b = -opt_var.getq()
+	task = pysot.GenericTask("MinVariable", A, b, opt_var)
+
+	# Setting the regularization weight.
+	task.setWeight(0.01)
+
+	task.update()
+
+	print(f"MinVar A:\n {task.getA()}")
+	print(f"MinVar b:\n {task.getb()}")
+	print(f"MinVar W:\n {task.getWeight()}")
+
+	return task
+
+def Wrench(name, distal_link, base_link, wrench):
+	'''Task to minimize f-fd using a generic task'''
+	A = wrench.getM()
+	b =	-wrench.getq()
+	return pysot.GenericTask(name, A, b, wrench) 
+
+def setDesiredForce(Wrench_task, wrench_desired, wrench):
+	b = -(wrench - wrench_desired).getq()
+	# b = -wrench_desired + wrench.getq()
+
+	print(f"wrench_desired: {wrench_desired}")
+	print(f"b: {b}")
+
+	# if b positive is fine
+	Wrench_task.setb(b)
 
 
 rospy.init_node("g1_wbid", disable_signals=True)
@@ -28,51 +63,53 @@ dqmax = model.getVelocityLimits()
 
 # Initial Joint Configuration
 q = [
-	# floating base
-	0.0,
-	0.0,
-	0.0,  # reference base linear
-	0.0,
-	0.0,
-	0.0,
-	1.0,  # refernce base quaternion
-	## left leg
-	-0.6,  # left_hip_pitch_joint
-	0.0,  # left_hip_roll_joint
-	0.0,  # left_hip_yaw_joint
-	1.2,  # left_knee_joint
-	-0.6,  # left_ankle_pitch_joint
-	0.0,  # left_ankle_roll_joint
-	## right leg
-	-0.6,  # right_hip_pitch_joint
-	0.0,  # right_hip_roll_joint
-	0.0,  # right_hip_yaw_joint
-	1.2,  # right_knee_joint
-	-0.6,  # right_ankle_pitch_joint
-	0.0,  # right_ankle_roll_joint
-	## waist
-	0.0,  # waist_yaw_joint
-	## left shoulder
-	0.0,  # left_shoulder_pitch_joint
-	0.0,  # left_shoulder_roll_joint
-	0.0,  # left_shoulder_yaw_joint
-	0.0,  # left_elbow_joint
-	0.0,  # left_wrist_roll_joint
-	## right shoulder
-	0.0,  #'right_shoulder_pitch_joint'
-	0.0,  # right_shoulder_roll_joint
-	0.0,  # right_shoulder_yaw_joint
-	0.0,  # right_elbow_joint
-	0.0,  # right_wrist_roll_joint
+    # floating base
+    0.0,
+    0.0,
+    0.0,  # reference base linear
+    0.0,
+    0.0,
+    0.0,
+    1.0,  # refernce base quaternion
+    ## left leg
+    -0.6,  # left_hip_pitch_joint
+    0.0,  # left_hip_roll_joint
+    0.0,  # left_hip_yaw_joint
+    1.2,  # left_knee_joint
+    -0.6,  # left_ankle_pitch_joint
+    0.0,  # left_ankle_roll_joint
+    ## right leg
+    -0.6,  # right_hip_pitch_joint
+    0.0,  # right_hip_roll_joint
+    0.0,  # right_hip_yaw_joint
+    1.2,  # right_knee_joint
+    -0.6,  # right_ankle_pitch_joint
+    0.0,  # right_ankle_roll_joint
+    ## waist
+    0.0,  # waist_yaw_joint
+    ## left shoulder
+    0.0,  # left_shoulder_pitch_joint
+    0.0,  # left_shoulder_roll_joint
+    0.0,  # left_shoulder_yaw_joint
+    0.0,  # left_elbow_joint
+    0.0,  # left_wrist_roll_joint
+    ## right shoulder
+    0.0,  #'right_shoulder_pitch_joint'
+    0.0,  # right_shoulder_roll_joint
+    0.0,  # right_shoulder_yaw_joint
+    0.0,  # right_elbow_joint
+    0.0,  # right_wrist_roll_joint
 ]
 
+# Set initial positions and velocities in the model
 dq = np.zeros(model.nv)
 model.setJointPosition(q)
 model.setJointVelocity(dq)
+
+# Update model to do Forward Kinematics and other updates
 model.update()
 
 # Instantiate Variables: qddot and contact forces (3 per contact)
-
 variables_vec = dict()
 variables_vec["qddot"] = model.nv
 
@@ -86,10 +123,9 @@ for contact_frame in contact_frames:
   variables_vec[contact_frame] = 3
 variables = pysot.OptvarHelper(variables_vec)
 
-# Set CoM tracking task
+# Just to get the com ref i will not use the task
 com = CoM(model, variables.getVariable("qddot"))
 com.setLambda(1.)
-# FK at initial config
 com_ref, vel_ref, acc_ref = com.getReference()
 com0 = com_ref.copy()
 
@@ -97,33 +133,44 @@ com0 = com_ref.copy()
 base = Cartesian("base", model, "world", "pelvis", variables.getVariable("qddot"))
 base.setLambda(1.)
 
+# Creates the stack with regularization of qddot.
+# stack = 0.1*com + 0.1*(base%[3, 4, 5])
+stack = MinVariable(variables.getVariable("qddot")) + 0.1*com + 0.1*(base%[3, 4, 5])
+# stack = MinVariable(variables.getVariable("qddot")) + 0.1*com
+
 # Set the contact task
 contact_tasks = list()
 cartesian_contact_task_frames = ["left_foot_point_contact", "right_foot_point_contact"]
 for cartesian_contact_task_frame in cartesian_contact_task_frames:
-  contact_tasks.append(Cartesian(cartesian_contact_task_frame, model, cartesian_contact_task_frame, "world", variables.getVariable("qddot")))
+	contact_tasks.append(Cartesian(cartesian_contact_task_frame, model, cartesian_contact_task_frame, "world", variables.getVariable("qddot")))
+	# Adds the contact task to the stack
+	stack = stack + 10.*(contact_tasks[-1])
 
+# # Postural task
 posture = Postural(model, variables.getVariable("qddot"))
 
-# For the base task taking only the orientation part
-stack = (0.1*com + 0.1*(base%[3, 4, 5]))
+
 force_variables = list()
 
-for i in range(len(cartesian_contact_task_frames)):
-  stack = stack + 10.*(contact_tasks[i])
+# Task for fdesired - factual
+wrench_tasks = list()
+for contact_frame in contact_frames:
+	wrench_tasks.append(Wrench(contact_frame, contact_frame, "pelvis", variables.getVariable(contact_frame)))
 
 for i in range(len(contact_frames)):
-  force_variables.append(variables.getVariable(contact_frames[i]))
+	# stack = stack + 1.*(wrench_tasks[i])
+	force_variables.append(variables.getVariable(contact_frames[i]))
 
-
-# Creates the stack.
-# Notice:  we do not need to keep track of the DynamicFeasibility constraint so it is created when added into the stack.
-# The same can be done with other constraints such as Joint Limits and Velocity Limits
+# Adds the floating base dynamics constraint
 stack = (pysot.AutoStack(stack)/posture) << DynamicFeasibility("floating_base_dynamics", model, variables.getVariable("qddot"), force_variables, contact_frames)
+# Adds joint limits and velocity limits constraints
 stack = stack << JointLimits(model, variables.getVariable("qddot"), qmax, qmin, 10.*dqmax, dt)
 stack = stack << VelocityLimits(model, variables.getVariable("qddot"), dqmax, dt)
+
+# Adds the friction cones constraints
 for i in range(len(contact_frames)):
 	T = model.getPose(contact_frames[i])
+	# Note: T.linear is the rotation from world to contact not the translation
 	mu = (T.linear, 0.8) # rotation is world to contact
 	stack = stack << FrictionCone(contact_frames[i], variables.getVariable(contact_frames[i]), model, mu)
    
@@ -140,6 +187,7 @@ w_T_b = TransformStamped()
 w_T_b.header.frame_id = "world"
 w_T_b.child_frame_id = "pelvis"
 
+# Create publishers for contact forces
 force_msg = list()
 fpubs = list()
 for contact_frame in contact_frames:
@@ -151,7 +199,6 @@ for contact_frame in contact_frames:
 t = 0.
 alpha = 0.4
 while not rospy.is_shutdown():
-	tic()
 	# Update actual position in the model
 	model.setJointPosition(q)
 	model.setJointVelocity(dq)
@@ -160,9 +207,9 @@ while not rospy.is_shutdown():
 	# Compute new reference for CoM task
 	com_ref[2] = com0[2] + alpha * np.sin(3.1415 * t)
 	com_ref[1] = com0[1] + alpha * np.cos(3.1415 * t)
-	t = t + dt
 	com.setReference(com_ref)
 
+	t = t + dt
 	# Update Stack
 	stack.update()
 
@@ -198,8 +245,5 @@ while not rospy.is_shutdown():
 
 
 	pub.publish(msg)
-  
-	# Time unit is seconds
-	# print("Time to compute: ", toc())
 
 	rate.sleep()

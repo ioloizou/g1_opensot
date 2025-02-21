@@ -13,18 +13,18 @@ from pyopensot.constraints.force import FrictionCone
 import pyopensot as pysot
 
 
-def MinVariable(opt_var): 
+def MinimizeVariable(name, opt_var): 
 	'''Task to regularize a variable using a generic task'''
 	A = opt_var.getM()
 
 	# The minus because y = Mx + q is mapped on ||Ax - b|| 
 	b = -opt_var.getq()
-	task = pysot.GenericTask("MinVariable", A, b, opt_var)
+	task = pysot.GenericTask(name, A, b, opt_var)
 
 	# Setting the regularization weight.
-	task.setWeight(0.0001)
+	task.setWeight(1)
 
-	task.update()
+	# task.update()
 
 	# print(f"MinVar A:\n {task.getA()}")
 	# print(f"MinVar b:\n {task.getb()}")
@@ -39,8 +39,9 @@ def Wrench(name, distal_link, base_link, wrench):
 	return pysot.GenericTask(name, A, b, wrench) 
 
 def setDesiredForce(Wrench_task, wrench_desired, wrench):
-	b = -(wrench - wrench_desired).getq()
-	# b = -wrench_desired + wrench.getq()
+	# b = -(wrench - wrench_desired).getq()
+	
+	b = wrench_desired
 
 	print(f"wrench_desired: {wrench_desired}")
 	print(f"b: {b}")
@@ -135,10 +136,14 @@ com0 = com_ref.copy()
 base = Cartesian("base", model, "world", "pelvis", variables.getVariable("qddot"))
 base.setLambda(1.)
 
-reg_qddot = MinVariable(variables.getVariable("qddot"))
-
 # Creates the stack.
-stack = 0.1*com + 0.1*(base%[3, 4, 5])
+# stack = 0.1*com + 0.1*(base%[3, 4, 5])
+stack = 0.1*(base%[3, 4, 5])
+
+for contact_frame in contact_frames:
+	stack = stack + MinimizeVariable(contact_frame, variables.getVariable(contact_frame))
+	# stack.setRegularisationTask(MinimizeVariable(contact_frame, variables.getVariable(contact_frame)))
+
 
 # Set the contact task
 contact_tasks = list()
@@ -159,9 +164,9 @@ force_variables = list()
 wrench_tasks = list()
 for contact_frame in contact_frames:
 	wrench_tasks.append(Wrench(contact_frame, contact_frame, "pelvis", variables.getVariable(contact_frame)))
+	stack = stack + 0.001*(wrench_tasks[-1])
 
 for i in range(len(contact_frames)):
-	# stack = stack + 1.*(wrench_tasks[i])
 	force_variables.append(variables.getVariable(contact_frames[i]))
 
 # Adds the floating base dynamics constraint
@@ -178,9 +183,13 @@ for i in range(len(contact_frames)):
 	mu = (T.linear, 0.8) # rotation is world to contact
 	stack = stack << FrictionCone(contact_frames[i], variables.getVariable(contact_frames[i]), model, mu)
 
+# Regularization task
+reg_qddot = MinimizeVariable("req_qddot", variables.getVariable("qddot"))
+
 # The regularization task should be added this ways
 # otherwise if added with + in stack it will not be consider in all priority levels
-stack.setRegularisationTask(reg_qddot)	 
+# stack.setRegularisationTask(reg_qddot)	 
+
 
 # Creates the solver
 solver = pysot.iHQP(stack)
@@ -203,6 +212,13 @@ for contact_frame in contact_frames:
 	force_msg[-1].header.frame_id = contact_frame
 	force_msg[-1].wrench.torque.x = force_msg[-1].wrench.torque.y = force_msg[-1].wrench.torque.z = 0.
 	fpubs.append(rospy.Publisher(contact_frame, WrenchStamped, queue_size=1))
+
+gravity = 9.80665
+
+# I want to divide the weight of the robot in the contact points
+wrench_desired = np.array([0., 0., model.getMass()*gravity / len(contact_frames)])
+for i in range(len(contact_frames)):
+	setDesiredForce(wrench_tasks[i], wrench_desired, variables.getVariable(contact_frames[i]))
 
 t = 0.
 alpha = 0.4

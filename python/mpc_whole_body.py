@@ -13,7 +13,7 @@ from pyopensot.constraints.force import FrictionCone
 import pyopensot as pysot
 
 
-def MinVariable(opt_var):
+def MinVariable(opt_var): 
 	'''Task to regularize a variable using a generic task'''
 	A = opt_var.getM()
 
@@ -22,13 +22,13 @@ def MinVariable(opt_var):
 	task = pysot.GenericTask("MinVariable", A, b, opt_var)
 
 	# Setting the regularization weight.
-	task.setWeight(0.01)
+	task.setWeight(0.0001)
 
 	task.update()
 
-	print(f"MinVar A:\n {task.getA()}")
-	print(f"MinVar b:\n {task.getb()}")
-	print(f"MinVar W:\n {task.getWeight()}")
+	# print(f"MinVar A:\n {task.getA()}")
+	# print(f"MinVar b:\n {task.getb()}")
+	# print(f"MinVar W:\n {task.getWeight()}")
 
 	return task
 
@@ -121,6 +121,8 @@ contact_frames = line_foot_contact_frames
 
 for contact_frame in contact_frames:
   variables_vec[contact_frame] = 3
+
+# Defining optimization variables
 variables = pysot.OptvarHelper(variables_vec)
 
 # Just to get the com ref i will not use the task
@@ -133,10 +135,10 @@ com0 = com_ref.copy()
 base = Cartesian("base", model, "world", "pelvis", variables.getVariable("qddot"))
 base.setLambda(1.)
 
-# Creates the stack with regularization of qddot.
-# stack = 0.1*com + 0.1*(base%[3, 4, 5])
-stack = MinVariable(variables.getVariable("qddot")) + 0.1*com + 0.1*(base%[3, 4, 5])
-# stack = MinVariable(variables.getVariable("qddot")) + 0.1*com
+reg_qddot = MinVariable(variables.getVariable("qddot"))
+
+# Creates the stack.
+stack = 0.1*com + 0.1*(base%[3, 4, 5])
 
 # Set the contact task
 contact_tasks = list()
@@ -148,6 +150,7 @@ for cartesian_contact_task_frame in cartesian_contact_task_frames:
 
 # # Postural task
 posture = Postural(model, variables.getVariable("qddot"))
+posture.setLambda(1.)
 
 
 force_variables = list()
@@ -167,13 +170,18 @@ stack = (pysot.AutoStack(stack)/posture) << DynamicFeasibility("floating_base_dy
 stack = stack << JointLimits(model, variables.getVariable("qddot"), qmax, qmin, 10.*dqmax, dt)
 stack = stack << VelocityLimits(model, variables.getVariable("qddot"), dqmax, dt)
 
+
 # Adds the friction cones constraints
 for i in range(len(contact_frames)):
 	T = model.getPose(contact_frames[i])
 	# Note: T.linear is the rotation from world to contact not the translation
 	mu = (T.linear, 0.8) # rotation is world to contact
 	stack = stack << FrictionCone(contact_frames[i], variables.getVariable(contact_frames[i]), model, mu)
-   
+
+# The regularization task should be added this ways
+# otherwise if added with + in stack it will not be consider in all priority levels
+stack.setRegularisationTask(reg_qddot)	 
+
 # Creates the solver
 solver = pysot.iHQP(stack)
 
@@ -212,6 +220,10 @@ while not rospy.is_shutdown():
 	t = t + dt
 	# Update Stack
 	stack.update()
+
+	# print(f"b updated: \n {reg_qddot.getb()}")
+
+	# print(f"Matrix updated: \n {base.getb().shape}")
 
 	# Solve
 	x = solver.solve()

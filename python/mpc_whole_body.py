@@ -1,4 +1,11 @@
+import sys
+import os
+# To be able to import srbd_mpc
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../')))
+
 from xbot2_interface import pyxbot2_interface as xbi
+from srbd_mpc import mpc
+from srbd_mpc import gait_planner
 
 import numpy as np
 
@@ -22,7 +29,7 @@ def MinimizeVariable(name, opt_var):
 	task = pysot.GenericTask(name, A, b, opt_var)
 
 	# Setting the regularization weight.
-	task.setWeight(1)
+	task.setWeight(1e-9)
 
 	# task.update()
 
@@ -41,17 +48,21 @@ def Wrench(name, distal_link, base_link, wrench):
 def setDesiredForce(Wrench_task, wrench_desired, wrench):
 	# b = -(wrench - wrench_desired).getq()
 	
-	b = wrench_desired
+	b = wrench_desired - wrench.getq()
 
-	print(f"wrench_desired: {wrench_desired}")
-	print(f"b: {b}")
+	# print(f"wrench_desired: {wrench_desired}")
+	# print(f"b: {b}")
 
 	# if b positive is fine
 	Wrench_task.setb(b)
 
 
 rospy.init_node("g1_wbid", disable_signals=True)
-dt = 1.0 / 500
+
+# dt = 1.0 / 500
+
+# For MPC to work
+dt = 0.04
 
 br = tf.TransformBroadcaster()
 
@@ -60,7 +71,6 @@ urdf = rospy.get_param("/robot_description")
 model = xbi.ModelInterface2(urdf)
 qmin, qmax = model.getJointLimits()
 dqmax = model.getVelocityLimits()
-
 
 # Initial Joint Configuration
 q = [
@@ -132,25 +142,19 @@ com.setLambda(1.)
 com_ref, vel_ref, acc_ref = com.getReference()
 com0 = com_ref.copy()
 
-# Set the whole Cartesian task but later only orientation will be used
+# # Set the whole Cartesian task but later only orientation will be used
 base = Cartesian("base", model, "world", "pelvis", variables.getVariable("qddot"))
 base.setLambda(1.)
 
 # Creates the stack.
-# stack = 0.1*com + 0.1*(base%[3, 4, 5])
-stack = 0.1*(base%[3, 4, 5])
-
-for contact_frame in contact_frames:
-	stack = stack + MinimizeVariable(contact_frame, variables.getVariable(contact_frame))
-	# stack.setRegularisationTask(MinimizeVariable(contact_frame, variables.getVariable(contact_frame)))
-
+stack = 0.1*com + 0.1*(base%[3, 4, 5])
+# stack = 0.1*(base%[3, 4, 5])
 
 # Set the contact task
 contact_tasks = list()
 cartesian_contact_task_frames = ["left_foot_point_contact", "right_foot_point_contact"]
 for cartesian_contact_task_frame in cartesian_contact_task_frames:
 	contact_tasks.append(Cartesian(cartesian_contact_task_frame, model, cartesian_contact_task_frame, "world", variables.getVariable("qddot")))
-	# Adds the contact task to the stack
 	stack = stack + 10.*(contact_tasks[-1])
 
 # # Postural task
@@ -164,7 +168,7 @@ force_variables = list()
 wrench_tasks = list()
 for contact_frame in contact_frames:
 	wrench_tasks.append(Wrench(contact_frame, contact_frame, "pelvis", variables.getVariable(contact_frame)))
-	stack = stack + 0.001*(wrench_tasks[-1])
+	stack = stack + 0.01*(wrench_tasks[-1])
 
 for i in range(len(contact_frames)):
 	force_variables.append(variables.getVariable(contact_frames[i]))
@@ -190,6 +194,9 @@ reg_qddot = MinimizeVariable("req_qddot", variables.getVariable("qddot"))
 # otherwise if added with + in stack it will not be consider in all priority levels
 # stack.setRegularisationTask(reg_qddot)	 
 
+# for contact_frame in contact_frames:
+	# stack = stack + MinimizeVariable(contact_frame, variables.getVariable(contact_frame))
+	# stack.setRegularisationTask(MinimizeVariable(contact_frame, variables.getVariable(contact_frame)))
 
 # Creates the solver
 solver = pysot.iHQP(stack)
@@ -213,12 +220,12 @@ for contact_frame in contact_frames:
 	force_msg[-1].wrench.torque.x = force_msg[-1].wrench.torque.y = force_msg[-1].wrench.torque.z = 0.
 	fpubs.append(rospy.Publisher(contact_frame, WrenchStamped, queue_size=1))
 
-gravity = 9.80665
+# MPC init
+SRBD_mpc = mpc.MPC(dt = dt)
+SRBD_mpc.init_matrices()
 
-# I want to divide the weight of the robot in the contact points
-wrench_desired = np.array([0., 0., model.getMass()*gravity / len(contact_frames)])
-for i in range(len(contact_frames)):
-	setDesiredForce(wrench_tasks[i], wrench_desired, variables.getVariable(contact_frames[i]))
+# Setup reference horizon.
+SRBD_mpc.x_ref_hor[:, -1] = SRBD_mpc.g
 
 t = 0.
 alpha = 0.4
@@ -229,23 +236,142 @@ while not rospy.is_shutdown():
 	model.update()
 
 	# Compute new reference for CoM task
-	com_ref[2] = com0[2] + alpha * np.sin(3.1415 * t)
-	com_ref[1] = com0[1] + alpha * np.cos(3.1415 * t)
-	com.setReference(com_ref)
+	# com_ref[1] = com0[1] + alpha * np.cos(3.1415 * t)
+	# com_ref[2] = com0[2] + alpha * np.sin(3.1415 * t)
+	# com.setReference(com_ref)
+
+	# Feed current CoM to MPC
+	SRBD_mpc.x_ref_hor[0, 3:6] = com0.copy()
+	print(f"com0: {com0}")
+	
+	if "pass_count" not in globals():
+		pass_count = 0
+	
+	pass_count += 1
+
+	if pass_count >= 2:
+		exit()	
+
+	com0_const = com0.copy()
+	# Feed horizon	CoM to MPC
+	for i in range(1, SRBD_mpc.HORIZON_LENGTH-1):
+		# com_ref[1] = com0[1] + alpha * np.cos(3.1415 * (t + i*dt))
+		# com_ref[2] = com0[2] + alpha * np.sin(3.1415 * (t + i*dt))	
+
+		com_ref[0] = 5.26790425e-02  
+		com_ref[1] = 7.44339342e-05
+		com_ref[2] = -8.20167454e-02
+		# com_ref[0] = com0_const[0]
+		# com_ref[1] = com0_const[1]
+		# com_ref[2] = com0_const[2]
+		SRBD_mpc.x_ref_hor[i, 3] = com_ref[0].copy() # x position
+		SRBD_mpc.x_ref_hor[i, 4] = com_ref[1].copy() # y position
+		SRBD_mpc.x_ref_hor[i, 5] = com_ref[2].copy() # z position     
+
+	
+	# Feed current Base orientation to MPC
+	q_euler0 = np.array(tf.transformations.euler_from_quaternion(q[3:7]))
+
+	# print(f"q_euler0: {q_euler0}")
+
+	# Transform Base orientation from quaternion to euler angles
+	SRBD_mpc.x_ref_hor[0, 0:3] = q_euler0.copy()
+	
+	# Feed horizon Base to MPC
+	# euler_angles = np.array(tf.transformations.euler_from_quaternion(q[3:7]))
+	euler_angles = np.array([0., 0., 0.])
+	SRBD_mpc.x_ref_hor[1:, 0:3] = np.tile(euler_angles, (SRBD_mpc.HORIZON_LENGTH-1, 1))
+
+	# Print horizon
+	# print(f"SRBD_mpc.x_ref_hor: {SRBD_mpc.x_ref_hor[:3, :]}")
+	
+	# Current foot heel and toe positions
+	left_heel = model.getPose("left_foot_line_contact_lower").translation
+	left_toe = model.getPose("left_foot_line_contact_upper").translation
+	
+	right_heel = model.getPose("right_foot_line_contact_lower").translation
+	right_toe = model.getPose("right_foot_line_contact_upper").translation
+
+	# Print all foot positions
+	# print(f"left_heel: {left_heel}")
+	# print(f"left_toe: {left_toe}")
+	# print(f"right_heel: {right_heel}")
+	# print(f"right_toe: {right_toe}")
+	# exit()
+
+	c_horizon = []
+	contact_horizon = []
+	for i in range(SRBD_mpc.HORIZON_LENGTH):
+		c_horizon.append(np.concatenate((left_heel, left_toe, right_heel ,right_toe)))
+	
+	# Both feet in contact for all the horizon
+	for i in range(SRBD_mpc.HORIZON_LENGTH):
+		contact_horizon.append(np.array([1, 1, 1, 1]))
 
 	t = t + dt
-	# Update Stack
-	stack.update()
 
 	# print(f"b updated: \n {reg_qddot.getb()}")
 
 	# print(f"Matrix updated: \n {base.getb().shape}")
 
-	# Solve
+	p_com_horizon = SRBD_mpc.x_ref_hor[:, 3:6].copy()
+
+	# print(f"r: {c_horizon[0][0:3] - p_com_horizon[0][:]}")
+	
+	# Perform MPC calculations.
+	SRBD_mpc.extract_psi()
+	SRBD_mpc.rotation_matrix_T()
+	SRBD_mpc.set_Q()
+	SRBD_mpc.set_R()
+	SRBD_mpc.calculate_A_continuous()
+	SRBD_mpc.calculate_A_discrete()
+	# print(np.asarray(c_horizon).shape)
+	# exit()
+	SRBD_mpc.calculate_B_continuous(c_horizon, p_com_horizon)
+	SRBD_mpc.calculate_B_discrete()
+	SRBD_mpc.calculate_Aqp()
+	SRBD_mpc.calculate_Bqp()
+	SRBD_mpc.calculate_Ac()
+	SRBD_mpc.calculate_bounds(contact_horizon)
+	SRBD_mpc.calculate_hessian()
+	SRBD_mpc.calculate_gradient()
+	SRBD_mpc.solve_qp()
+
+	# Taking the first control input
+	u_opt0 = SRBD_mpc.u_opt[:, :]
+	print(f"u_opt0: {u_opt0}")
+
+	# exit()
+	
+	# gravity = 9.80665
+	# I want to divide the weight of the robot in the contact points
+	# wrench_desired = np.array([0., 0., model.getMass()*gravity / len(contact_frames)])
+	
+	# for i in range(len(contact_frames)):
+	# 	setDesiredForce(wrench_tasks[i], u_opt0[i*3:i*3+3], variables.getVariable(contact_frames[i]))
+	
+	# Update Stack
+	stack.update()
+
+	# Solve WBID QP
 	x = solver.solve()
 	ddq = variables.getVariable("qddot").getValue(x) # from variables vector we retrieve the joint accelerations
 	q = model.sum(q, dq*dt + 0.5 * ddq * dt * dt) # we use the model sum to account for the floating-base
 	dq += ddq*dt
+
+	# Print me heel and toe forces from the solver
+	# for i in range(len(contact_frames)):
+	# 	print(f"contact_frame: {contact_frames[i]}")
+	# 	print(f"force: {variables.getVariable(contact_frames[i]).getValue(x)}")
+
+	
+	# Update current state
+	com = CoM(model, variables.getVariable("qddot"))
+	com.setLambda(1.)
+	com_ref, vel_ref, acc_ref = com.getReference()
+	com0 = com_ref.copy()
+	q_euler0 = tf.transformations.euler_from_quaternion(q[3:7])
+	print(f"q_euler0: {q_euler0}")
 
 	# Publish joint states
 	msg.position = q[7::]

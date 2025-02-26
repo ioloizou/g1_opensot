@@ -28,10 +28,10 @@ def MinimizeVariable(name, opt_var):
 	b = -opt_var.getq()
 	task = pysot.GenericTask(name, A, b, opt_var)
 
-	# Setting the regularization weight.
-	task.setWeight(1e-9)
 
-	# task.update()
+	# Setting the regularization weight.
+	task.setWeight(1.)
+	task.update()
 
 	# print(f"MinVar A:\n {task.getA()}")
 	# print(f"MinVar b:\n {task.getb()}")
@@ -41,21 +41,29 @@ def MinimizeVariable(name, opt_var):
 
 def Wrench(name, distal_link, base_link, wrench):
 	'''Task to minimize f-fd using a generic task'''
-	A = wrench.getM()
-	b =	-wrench.getq()
+
+	# print(wrench)
+	# print(wrench.getM().shape)
+	# print(wrench.getq())
+
+	A = np.eye(3)
+	b =	- wrench.getq()
+	
 	return pysot.GenericTask(name, A, b, wrench) 
 
 def setDesiredForce(Wrench_task, wrench_desired, wrench):
 	# b = -(wrench - wrench_desired).getq()
-	
+
 	b = wrench_desired - wrench.getq()
-
-	# print(f"wrench_desired: {wrench_desired}")
-	# print(f"b: {b}")
-
-	# if b positive is fine
+	
+	print(f"b: {b}")
+	
+	# print(f'wrench_desired_dimensions: {wrench_desired.shape}')
+	# print(f'wrench: {wrench}')
+	# print(wrench.getM().shape)
+	# print(f'wrench_dimensions: {wrench.getq().shape}')
+	# print(f'b_dimensions: {b.shape}')
 	Wrench_task.setb(b)
-
 
 rospy.init_node("g1_wbid", disable_signals=True)
 
@@ -146,16 +154,19 @@ com0 = com_ref.copy()
 base = Cartesian("base", model, "world", "pelvis", variables.getVariable("qddot"))
 base.setLambda(1.)
 
-# Creates the stack.
-stack = 0.1*com + 0.1*(base%[3, 4, 5])
-# stack = 0.1*(base%[3, 4, 5])
 
 # Set the contact task
 contact_tasks = list()
 cartesian_contact_task_frames = ["left_foot_point_contact", "right_foot_point_contact"]
 for cartesian_contact_task_frame in cartesian_contact_task_frames:
 	contact_tasks.append(Cartesian(cartesian_contact_task_frame, model, cartesian_contact_task_frame, "world", variables.getVariable("qddot")))
+	if "stack" not in globals():
+		stack = 10.*(contact_tasks[-1])
 	stack = stack + 10.*(contact_tasks[-1])
+
+# stack = stack + 0.1*com + 0.1*(base%[3, 4, 5])
+# stack = stack + 0.1*com
+# stack = stack + 0.1*(base%[3, 4, 5])
 
 # # Postural task
 posture = Postural(model, variables.getVariable("qddot"))
@@ -164,7 +175,7 @@ posture.setLambda(1.)
 
 force_variables = list()
 
-# Task for fdesired - factual
+# Task for factual - fdesired
 wrench_tasks = list()
 for contact_frame in contact_frames:
 	wrench_tasks.append(Wrench(contact_frame, contact_frame, "pelvis", variables.getVariable(contact_frame)))
@@ -184,7 +195,7 @@ stack = stack << VelocityLimits(model, variables.getVariable("qddot"), dqmax, dt
 for i in range(len(contact_frames)):
 	T = model.getPose(contact_frames[i])
 	# Note: T.linear is the rotation from world to contact not the translation
-	mu = (T.linear, 0.8) # rotation is world to contact
+	mu = (T.linear, 0.3) # rotation is world to contact
 	stack = stack << FrictionCone(contact_frames[i], variables.getVariable(contact_frames[i]), model, mu)
 
 # Regularization task
@@ -192,13 +203,12 @@ reg_qddot = MinimizeVariable("req_qddot", variables.getVariable("qddot"))
 
 # The regularization task should be added this ways
 # otherwise if added with + in stack it will not be consider in all priority levels
-# stack.setRegularisationTask(reg_qddot)	 
+stack.setRegularisationTask((1e-9)*reg_qddot)	 
 
 # for contact_frame in contact_frames:
-	# stack = stack + MinimizeVariable(contact_frame, variables.getVariable(contact_frame))
-	# stack.setRegularisationTask(MinimizeVariable(contact_frame, variables.getVariable(contact_frame)))
+	# stack.setRegularisationTask((1e-5)*MinimizeVariable(contact_frame, variables.getVariable(contact_frame)))
 
-# Creates the solver
+# Creates the solver	
 solver = pysot.iHQP(stack)
 
 # ID loop: we publish also joint position, floating-base pose and contact forces
@@ -242,28 +252,20 @@ while not rospy.is_shutdown():
 
 	# Feed current CoM to MPC
 	SRBD_mpc.x_ref_hor[0, 3:6] = com0.copy()
-	print(f"com0: {com0}")
-	
-	if "pass_count" not in globals():
-		pass_count = 0
-	
-	pass_count += 1
 
-	if pass_count >= 2:
-		exit()	
-
-	com0_const = com0.copy()
+	if t == 0.0:
+		SRBD_mpc.x0 = SRBD_mpc.x_ref_hor[0].copy()
+	else:
+		SRBD_mpc.x0 = x_current.copy()
+	
 	# Feed horizon	CoM to MPC
-	for i in range(1, SRBD_mpc.HORIZON_LENGTH-1):
+	for i in range(1, SRBD_mpc.HORIZON_LENGTH):
 		# com_ref[1] = com0[1] + alpha * np.cos(3.1415 * (t + i*dt))
 		# com_ref[2] = com0[2] + alpha * np.sin(3.1415 * (t + i*dt))	
 
 		com_ref[0] = 5.26790425e-02  
 		com_ref[1] = 7.44339342e-05
 		com_ref[2] = -8.20167454e-02
-		# com_ref[0] = com0_const[0]
-		# com_ref[1] = com0_const[1]
-		# com_ref[2] = com0_const[2]
 		SRBD_mpc.x_ref_hor[i, 3] = com_ref[0].copy() # x position
 		SRBD_mpc.x_ref_hor[i, 4] = com_ref[1].copy() # y position
 		SRBD_mpc.x_ref_hor[i, 5] = com_ref[2].copy() # z position     
@@ -272,8 +274,6 @@ while not rospy.is_shutdown():
 	# Feed current Base orientation to MPC
 	q_euler0 = np.array(tf.transformations.euler_from_quaternion(q[3:7]))
 
-	# print(f"q_euler0: {q_euler0}")
-
 	# Transform Base orientation from quaternion to euler angles
 	SRBD_mpc.x_ref_hor[0, 0:3] = q_euler0.copy()
 	
@@ -281,9 +281,6 @@ while not rospy.is_shutdown():
 	# euler_angles = np.array(tf.transformations.euler_from_quaternion(q[3:7]))
 	euler_angles = np.array([0., 0., 0.])
 	SRBD_mpc.x_ref_hor[1:, 0:3] = np.tile(euler_angles, (SRBD_mpc.HORIZON_LENGTH-1, 1))
-
-	# Print horizon
-	# print(f"SRBD_mpc.x_ref_hor: {SRBD_mpc.x_ref_hor[:3, :]}")
 	
 	# Current foot heel and toe positions
 	left_heel = model.getPose("left_foot_line_contact_lower").translation
@@ -291,13 +288,6 @@ while not rospy.is_shutdown():
 	
 	right_heel = model.getPose("right_foot_line_contact_lower").translation
 	right_toe = model.getPose("right_foot_line_contact_upper").translation
-
-	# Print all foot positions
-	# print(f"left_heel: {left_heel}")
-	# print(f"left_toe: {left_toe}")
-	# print(f"right_heel: {right_heel}")
-	# print(f"right_toe: {right_toe}")
-	# exit()
 
 	c_horizon = []
 	contact_horizon = []
@@ -310,14 +300,8 @@ while not rospy.is_shutdown():
 
 	t = t + dt
 
-	# print(f"b updated: \n {reg_qddot.getb()}")
-
-	# print(f"Matrix updated: \n {base.getb().shape}")
-
 	p_com_horizon = SRBD_mpc.x_ref_hor[:, 3:6].copy()
 
-	# print(f"r: {c_horizon[0][0:3] - p_com_horizon[0][:]}")
-	
 	# Perform MPC calculations.
 	SRBD_mpc.extract_psi()
 	SRBD_mpc.rotation_matrix_T()
@@ -325,8 +309,6 @@ while not rospy.is_shutdown():
 	SRBD_mpc.set_R()
 	SRBD_mpc.calculate_A_continuous()
 	SRBD_mpc.calculate_A_discrete()
-	# print(np.asarray(c_horizon).shape)
-	# exit()
 	SRBD_mpc.calculate_B_continuous(c_horizon, p_com_horizon)
 	SRBD_mpc.calculate_B_discrete()
 	SRBD_mpc.calculate_Aqp()
@@ -338,40 +320,84 @@ while not rospy.is_shutdown():
 	SRBD_mpc.solve_qp()
 
 	# Taking the first control input
-	u_opt0 = SRBD_mpc.u_opt[:, :]
-	print(f"u_opt0: {u_opt0}")
+	u_opt0 = SRBD_mpc.u_opt[0, :]
 
-	# exit()
+	# Rollout the control input
+	SRBD_mpc.compute_rollout(SRBD_mpc.x0)
+
 	
-	# gravity = 9.80665
 	# I want to divide the weight of the robot in the contact points
-	# wrench_desired = np.array([0., 0., model.getMass()*gravity / len(contact_frames)])
+	gravity = 9.80665
+	wrench_desired = np.array([0., 0., model.getMass()*gravity / len(contact_frames)])
 	
-	# for i in range(len(contact_frames)):
-	# 	setDesiredForce(wrench_tasks[i], u_opt0[i*3:i*3+3], variables.getVariable(contact_frames[i]))
+	# wrench_desired_heel_left = np.array([0., 0., 88.])
+	# wrench_desired_toe_left = np.array([0., 0., 82.])
+	# wrench_desired_heel_right = np.array([0., 0., 88.])
+	# wrench_desired_toe_right = np.array([0., 0., 82.])
+
+	# wrench_concatenated = np.vstack((wrench_desired_heel_left, wrench_desired_toe_left, wrench_desired_heel_right, wrench_desired_toe_right))
+
+	# u_opt0 has form of [fx_left_heel, fy_left_heel, fz_left_heel, fx_left_toe, fy_left_toe, fz_left_toe, fx_right_heel, fy_right_heel, fz_right_heel, fx_right_toe, fy_right_toe, fz_right_toe]
+	
+	for i in range(len(contact_frames)):
+			# setDesiredForce(wrench_tasks[i], u_opt0[i*3:i*3+3], variables.getVariable(contact_frames[i]))
+			setDesiredForce(wrench_tasks[i], wrench_desired, variables.getVariable(contact_frames[i]))
 	
 	# Update Stack
 	stack.update()
-
+	
 	# Solve WBID QP
 	x = solver.solve()
+	
 	ddq = variables.getVariable("qddot").getValue(x) # from variables vector we retrieve the joint accelerations
 	q = model.sum(q, dq*dt + 0.5 * ddq * dt * dt) # we use the model sum to account for the floating-base
 	dq += ddq*dt
 
 	# Print me heel and toe forces from the solver
-	# for i in range(len(contact_frames)):
-	# 	print(f"contact_frame: {contact_frames[i]}")
-	# 	print(f"force: {variables.getVariable(contact_frames[i]).getValue(x)}")
+	for i in range(len(contact_frames)):
+		print("QP solver =========================================")
+		print(f"contact_frame: {contact_frames[i]}, force: {variables.getVariable(contact_frames[i]).getValue(x)}")
 
 	
 	# Update current state
 	com = CoM(model, variables.getVariable("qddot"))
-	com.setLambda(1.)
 	com_ref, vel_ref, acc_ref = com.getReference()
+	# print(f"v: {vel_ref}")
 	com0 = com_ref.copy()
+	
 	q_euler0 = tf.transformations.euler_from_quaternion(q[3:7])
-	print(f"q_euler0: {q_euler0}")
+	# print(f"q_euler0: {q_euler0}")
+	
+	# Getting the orientaion speed of the base since CoM does not have orientation
+	dq_euler0 = SRBD_mpc.rotation_z_T @ dq[3:6]
+	
+	vel0_ref = dq[0:3]
+
+	# Print me the shapes of rotation and dq
+	# print(f"rotation_z_T shape: {SRBD_mpc.rotation_z_T.shape}")
+	# print(f"dq shape: {dq[3:6].shape}")
+
+
+	# print(f"dq_euler0: {dq_euler0}")
+
+	
+	x_current = np.zeros(SRBD_mpc.NUM_STATES)
+	x_current[0:3] = q_euler0
+	x_current[3:6] = com0
+	x_current[6:9] = dq_euler0
+	x_current[9:12] = vel0_ref
+	x_current[12] = SRBD_mpc.g
+
+	# Add the gravity as the last term in x_current
+
+
+	if "pass_count" not in globals():
+		pass_count = 0
+	
+	pass_count += 1
+	print(f"pass_count: {pass_count}")
+	if pass_count >= 200:
+		exit()	
 
 	# Publish joint states
 	msg.position = q[7::]

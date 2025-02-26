@@ -19,6 +19,7 @@ from pyopensot.constraints.acceleration import JointLimits, VelocityLimits
 from pyopensot.constraints.force import FrictionCone
 import pyopensot as pysot
 
+import matplotlib.pyplot as plt
 
 def MinimizeVariable(name, opt_var): 
 	'''Task to regularize a variable using a generic task'''
@@ -64,6 +65,131 @@ def setDesiredForce(Wrench_task, wrench_desired, wrench):
 	# print(f'wrench_dimensions: {wrench.getq().shape}')
 	# print(f'b_dimensions: {b.shape}')
 	Wrench_task.setb(b)
+
+def plot_all_trajectories(com_hist, orient_hist, vel_hist, orient_deriv_hist, 
+                          com_ref_hist, orient_ref_hist, vel_ref_hist, orient_deriv_ref_hist, dt):
+    n_points = len(com_hist)
+    time_array = np.arange(n_points) * dt
+
+    fig, axs = plt.subplots(2, 2, figsize=(12, 10))
+
+    # Center of Mass Trajectory
+    ax = axs[0, 0]
+    ax.plot(time_array, [c[0] for c in com_hist], label="X")
+    ax.plot(time_array, [c[1] for c in com_hist], label="Y")
+    ax.plot(time_array, [c[2] for c in com_hist], label="Z")
+    
+    # Add reference trajectories as dotted lines
+    ax.plot(time_array, [c[0] for c in com_ref_hist], 'b--', label="X ref")
+    ax.plot(time_array, [c[1] for c in com_ref_hist], '--', color='orange', label="Y ref")
+    ax.plot(time_array, [c[2] for c in com_ref_hist], 'g--', label="Z ref")
+    
+    ax.set_title("Center of Mass Trajectory")
+    ax.set_xlabel("Time (s)")
+    ax.set_ylabel("Position (m)")
+    ax.grid(True)
+    ax.legend()
+
+    # Orientation Trajectory
+    ax = axs[0, 1]
+    ax.plot(time_array, [o[0] for o in orient_hist], label="Roll")
+    ax.plot(time_array, [o[1] for o in orient_hist], label="Pitch")
+    ax.plot(time_array, [o[2] for o in orient_hist], label="Yaw")
+    
+    # Add reference trajectories as dotted lines
+    ax.plot(time_array, [o[0] for o in orient_ref_hist], 'b--', label="Roll ref")
+    ax.plot(time_array, [o[1] for o in orient_ref_hist], '--', color='orange', label="Pitch ref")
+    ax.plot(time_array, [o[2] for o in orient_ref_hist], 'g--', label="Yaw ref")
+    
+    ax.set_title("SRBD Orientation")
+    ax.set_xlabel("Time (s)")
+    ax.set_ylabel("Angle (rad)")
+    ax.grid(True)
+    ax.legend()
+
+    # COM Velocity Trajectory
+    ax = axs[1, 0]
+    ax.plot(time_array, [v[0] for v in vel_hist], label="Vx")
+    ax.plot(time_array, [v[1] for v in vel_hist], label="Vy")
+    ax.plot(time_array, [v[2] for v in vel_hist], label="Vz")
+    
+    # Add reference trajectories as dotted lines
+    ax.plot(time_array, [v[0] for v in vel_ref_hist], 'b--', label="Vx ref")
+    ax.plot(time_array, [v[1] for v in vel_ref_hist], '--', color='orange', label="Vy ref")
+    ax.plot(time_array, [v[2] for v in vel_ref_hist], 'g--', label="Vz ref")
+    
+    ax.set_title("COM Velocity Trajectory")
+    ax.set_xlabel("Time (s)")
+    ax.set_ylabel("Velocity (m/s)")
+    ax.grid(True)
+    ax.legend()
+
+    # Orientation Derivative Trajectory
+    ax = axs[1, 1]
+    ax.plot(time_array, [od[0] for od in orient_deriv_hist], label="Roll Rate")
+    ax.plot(time_array, [od[1] for od in orient_deriv_hist], label="Pitch Rate")
+    ax.plot(time_array, [od[2] for od in orient_deriv_hist], label="Yaw Rate")
+    
+    # Add reference trajectories as dotted lines
+    ax.plot(time_array, [od[0] for od in orient_deriv_ref_hist], 'b--', label="Roll Rate ref")
+    ax.plot(time_array, [od[1] for od in orient_deriv_ref_hist], '--', color='orange', label="Pitch Rate ref")
+    ax.plot(time_array, [od[2] for od in orient_deriv_ref_hist], 'g--', label="Yaw Rate ref")
+    
+    ax.set_title("Orientation Derivative Trajectory")
+    ax.set_xlabel("Time (s)")
+    ax.set_ylabel("Rate (rad/s)")
+    ax.grid(True)
+    ax.legend()
+
+    plt.tight_layout()
+    plt.show()
+    
+def plot_ground_reaction_forces(grf_hist, dt):
+    time_array = np.arange(len(grf_hist)) * dt
+    fig, axs = plt.subplots(2, 2, figsize=(12, 10))
+    
+    # Left Heel (Back) GRF: columns 0-2
+    axs[0, 0].plot(time_array, [f[0] for f in grf_hist], label='Fx Heel (Left)')
+    axs[0, 0].plot(time_array, [f[1] for f in grf_hist], label='Fy Heel (Left)')
+    axs[0, 0].plot(time_array, [f[2] for f in grf_hist], label='Fz Heel (Left)')
+    axs[0, 0].set_title('Left Heel Ground Reaction Forces')
+    axs[0, 0].set_xlabel('Time (s)')
+    axs[0, 0].set_ylabel('Force (N)')
+    axs[0, 0].grid(True)
+    axs[0, 0].legend()
+    
+    # Left Toe (Front) GRF: columns 3-5
+    axs[0, 1].plot(time_array, [f[3] for f in grf_hist], label='Fx Toe (Left)')
+    axs[0, 1].plot(time_array, [f[4] for f in grf_hist], label='Fy Toe (Left)')
+    axs[0, 1].plot(time_array, [f[5] for f in grf_hist], label='Fz Toe (Left)')
+    axs[0, 1].set_title('Left Toe Ground Reaction Forces')
+    axs[0, 1].set_xlabel('Time (s)')
+    axs[0, 1].set_ylabel('Force (N)')
+    axs[0, 1].grid(True)
+    axs[0, 1].legend()
+    
+    # Right Heel (Back) GRF: columns 6-8
+    axs[1, 0].plot(time_array, [f[6] for f in grf_hist], label='Fx Heel (Right)')
+    axs[1, 0].plot(time_array, [f[7] for f in grf_hist], label='Fy Heel (Right)')
+    axs[1, 0].plot(time_array, [f[8] for f in grf_hist], label='Fz Heel (Right)')
+    axs[1, 0].set_title('Right Heel Ground Reaction Forces')
+    axs[1, 0].set_xlabel('Time (s)')
+    axs[1, 0].set_ylabel('Force (N)')
+    axs[1, 0].grid(True)
+    axs[1, 0].legend()
+    
+    # Right Toe (Front) GRF: columns 9-11
+    axs[1, 1].plot(time_array, [f[9] for f in grf_hist], label='Fx Toe (Right)')
+    axs[1, 1].plot(time_array, [f[10] for f in grf_hist], label='Fy Toe (Right)')
+    axs[1, 1].plot(time_array, [f[11] for f in grf_hist], label='Fz Toe (Right)')
+    axs[1, 1].set_title('Right Toe Ground Reaction Forces')
+    axs[1, 1].set_xlabel('Time (s)')
+    axs[1, 1].set_ylabel('Force (N)')
+    axs[1, 1].grid(True)
+    axs[1, 1].legend()
+    
+    plt.tight_layout()
+    plt.show()
 
 rospy.init_node("g1_wbid", disable_signals=True)
 
@@ -203,7 +329,7 @@ reg_qddot = MinimizeVariable("req_qddot", variables.getVariable("qddot"))
 
 # The regularization task should be added this ways
 # otherwise if added with + in stack it will not be consider in all priority levels
-stack.setRegularisationTask((1e-9)*reg_qddot)	 
+stack.setRegularisationTask((1e-3)*reg_qddot)	 
 
 # for contact_frame in contact_frames:
 	# stack.setRegularisationTask((1e-5)*MinimizeVariable(contact_frame, variables.getVariable(contact_frame)))
@@ -237,6 +363,17 @@ SRBD_mpc.init_matrices()
 # Setup reference horizon.
 SRBD_mpc.x_ref_hor[:, -1] = SRBD_mpc.g
 
+com_hist = []
+orient_hist = []
+vel_hist = []
+orient_deriv_hist = []
+grf_hist = []
+
+com_ref_hist = []
+orient_ref_hist = []
+vel_ref_hist = []
+orient_deriv_ref_hist = []
+
 t = 0.
 alpha = 0.4
 while not rospy.is_shutdown():
@@ -248,22 +385,27 @@ while not rospy.is_shutdown():
 	# Compute new reference for CoM task
 	# com_ref[1] = com0[1] + alpha * np.cos(3.1415 * t)
 	# com_ref[2] = com0[2] + alpha * np.sin(3.1415 * t)
+	# print(f"com_ref: {com_ref}")
 	# com.setReference(com_ref)
 
 	# Feed current CoM to MPC
-	SRBD_mpc.x_ref_hor[0, 3:6] = com0.copy()
+	# SRBD_mpc.x_ref_hor[0, 3:6] = com0.copy()
 
 	if t == 0.0:
+		# Feed current Base orientation to MPC
+		q_euler0 = np.array(tf.transformations.euler_from_quaternion(q[3:7]))
+		SRBD_mpc.x_ref_hor[0, 0:3] = q_euler0.copy()
+		SRBD_mpc.x_ref_hor[0, 3:6] = com0.copy()
 		SRBD_mpc.x0 = SRBD_mpc.x_ref_hor[0].copy()
 	else:
 		SRBD_mpc.x0 = x_current.copy()
 	
 	# Feed horizon	CoM to MPC
-	for i in range(1, SRBD_mpc.HORIZON_LENGTH):
+	for i in range(1, SRBD_mpc.HORIZON_LENGTH-1):
 		# com_ref[1] = com0[1] + alpha * np.cos(3.1415 * (t + i*dt))
 		# com_ref[2] = com0[2] + alpha * np.sin(3.1415 * (t + i*dt))	
 
-		com_ref[0] = 5.26790425e-02  
+		com_ref[0] = 5.26790425e-02
 		com_ref[1] = 7.44339342e-05
 		com_ref[2] = -8.20167454e-02
 		SRBD_mpc.x_ref_hor[i, 3] = com_ref[0].copy() # x position
@@ -327,8 +469,8 @@ while not rospy.is_shutdown():
 
 	
 	# I want to divide the weight of the robot in the contact points
-	gravity = 9.80665
-	wrench_desired = np.array([0., 0., model.getMass()*gravity / len(contact_frames)])
+	# gravity = 9.80665
+	# wrench_desired = np.array([0., 0., model.getMass()*gravity / len(contact_frames)])
 	
 	# wrench_desired_heel_left = np.array([0., 0., 88.])
 	# wrench_desired_toe_left = np.array([0., 0., 82.])
@@ -340,8 +482,8 @@ while not rospy.is_shutdown():
 	# u_opt0 has form of [fx_left_heel, fy_left_heel, fz_left_heel, fx_left_toe, fy_left_toe, fz_left_toe, fx_right_heel, fy_right_heel, fz_right_heel, fx_right_toe, fy_right_toe, fz_right_toe]
 	
 	for i in range(len(contact_frames)):
-			# setDesiredForce(wrench_tasks[i], u_opt0[i*3:i*3+3], variables.getVariable(contact_frames[i]))
-			setDesiredForce(wrench_tasks[i], wrench_desired, variables.getVariable(contact_frames[i]))
+			setDesiredForce(wrench_tasks[i], u_opt0[i*3:i*3+3], variables.getVariable(contact_frames[i]))
+			# setDesiredForce(wrench_tasks[i], wrench_desired, variables.getVariable(contact_frames[i]))
 	
 	# Update Stack
 	stack.update()
@@ -361,8 +503,7 @@ while not rospy.is_shutdown():
 	
 	# Update current state
 	com = CoM(model, variables.getVariable("qddot"))
-	com_ref, vel_ref, acc_ref = com.getReference()
-	# print(f"v: {vel_ref}")
+	com_ref, _, _ = com.getReference()
 	com0 = com_ref.copy()
 	
 	q_euler0 = tf.transformations.euler_from_quaternion(q[3:7])
@@ -380,7 +521,6 @@ while not rospy.is_shutdown():
 
 	# print(f"dq_euler0: {dq_euler0}")
 
-	
 	x_current = np.zeros(SRBD_mpc.NUM_STATES)
 	x_current[0:3] = q_euler0
 	x_current[3:6] = com0
@@ -396,8 +536,24 @@ while not rospy.is_shutdown():
 	
 	pass_count += 1
 	print(f"pass_count: {pass_count}")
-	if pass_count >= 200:
+	if pass_count >= 10:
+		# Convert lists to numpy arrays for easier plotting
+		plot_all_trajectories(com_hist, orient_hist, vel_hist, orient_deriv_hist, com_ref_hist, orient_ref_hist, vel_ref_hist, orient_deriv_ref_hist, dt)
+		plot_ground_reaction_forces(grf_hist, dt)
 		exit()	
+
+	# Record current state in history
+	com_hist.append(com0.copy())
+	orient_hist.append(q_euler0)
+	vel_hist.append(vel0_ref.copy())
+	orient_deriv_hist.append(dq_euler0.copy())
+	grf_hist.append(u_opt0.copy())
+
+	# Record reference state in history
+	com_ref_hist.append(SRBD_mpc.x_ref_hor[1, 3:6].copy())
+	orient_ref_hist.append(SRBD_mpc.x_ref_hor[1, 0:3].copy())
+	vel_ref_hist.append(SRBD_mpc.x_ref_hor[1, 9:12].copy())
+	orient_deriv_ref_hist.append(SRBD_mpc.x_ref_hor[1, 6:9].copy())
 
 	# Publish joint states
 	msg.position = q[7::]

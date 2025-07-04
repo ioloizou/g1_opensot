@@ -4,7 +4,7 @@ from rcl_interfaces.srv import GetParameters
 from ament_index_python.packages import get_package_share_directory
 from xbot2_interface import pyxbot2_interface as xbi
 from pyopensot.tasks.acceleration import Cartesian, CoM, DynamicFeasibility, Postural
-from pyopensot.constraints.acceleration import JointLimits, VelocityLimits
+from pyopensot.constraints.acceleration import JointLimits, VelocityLimits, TorqueLimits
 from pyopensot.constraints.force import FrictionCone
 from pyopensot.variables import Torque
 from pyopensot.tasks import MinimizeVariable
@@ -74,6 +74,7 @@ node = ros2_node()
 model = xbi.ModelInterface2(node.urdf)
 qmin, qmax = model.getJointLimits()
 dqmax = model.getVelocityLimits()
+torque_limits = model.getEffortLimits()
 
 q = np.zeros(model.nq)
 
@@ -131,6 +132,7 @@ stack = stack + 1e-8 * MinimizeVariable("min_torques", torques)
 stack = pysot.AutoStack(stack) << DynamicFeasibility("floating_base_dynamics", model, variables.getVariable("qddot"), force_variables, contact_frames)
 stack = stack << JointLimits(model, variables.getVariable("qddot"), qmax, qmin, 10.*dqmax, dt)
 stack = stack << VelocityLimits(model, variables.getVariable("qddot"), dqmax, dt)
+stack = stack << TorqueLimits(model, variables.getVariable("qddot"), force_variables, contact_frames, torque_limits)
 for i in range(len(contact_frames)):
     T = model.getPose(contact_frames[i])
     mu = (T.linear, 0.8) # rotation is world to contact

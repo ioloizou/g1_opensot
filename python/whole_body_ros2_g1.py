@@ -94,7 +94,7 @@ model.update()
 dt = 1./1000.
 
 # Instantiate Variables: qddot and contact forces (3 per contact)
-contact_frames = ["left_foot_lower_left", "left_foot_lower_right", "left_foot_lower_right", "left_foot_upper_right",
+contact_frames = ["left_foot_lower_left", "left_foot_lower_right", "left_foot_upper_right", "left_foot_upper_right",
                   "right_foot_lower_left", "right_foot_lower_right", "right_foot_upper_left", "right_foot_upper_right"]
 variables_vec = dict()
 variables_vec["qddot"] = model.nv
@@ -117,7 +117,9 @@ for contact_frame in contact_frames:
 
 posture = Postural(model, variables.getVariable("qddot"))
 
-stack = 0.1*com + 0.1*(base%[3, 4, 5]) + 0.0001*posture
+req_qddot = MinimizeVariable("min_qddot", variables.getVariable("qddot"))
+
+stack = 0.1*com + 0.1*(base%[3, 4, 5]) + 0.0001*posture + req_qddot
 force_variables = list()
 for i in range(len(contact_frames)):
     stack = stack + 10.*(contact_tasks[i]%[0, 1, 2])
